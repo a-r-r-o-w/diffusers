@@ -80,11 +80,13 @@ class SDXLDifferentialDiffusionPipeline(StableDiffusionXLImg2ImgPipeline):
 
                 if denoising_start is None:
                     latents = original_with_noise[:1]
-                else:
-                    mask = masks[i].unsqueeze(0)
-                    mask = mask.to(latents.dtype)
-                    mask = mask.unsqueeze(1)
-                    latents = original_with_noise[i] * mask + latents * (1 - mask)
+            else:
+                mask = masks[i].unsqueeze(0)
+                mask = mask.to(latents.dtype)
+                mask = mask.unsqueeze(1)
+                latents = original_with_noise[i] * mask + latents * (1 - mask)
+
+            return latents
 
         callback_on_step_begin_tensor_inputs = ["timesteps", "batch_size", "prompt_embeds", "device", "latents"]
 
