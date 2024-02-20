@@ -86,7 +86,9 @@ class SDXLDifferentialDiffusionPipeline(StableDiffusionXLImg2ImgPipeline):
                 mask = mask.unsqueeze(1)
                 latents = original_with_noise[i] * mask + latents * (1 - mask)
 
-            return latents
+            return {
+                "latents": latents,
+            }
 
         callback_on_step_begin_tensor_inputs = ["timesteps", "batch_size", "prompt_embeds", "device", "latents"]
 
