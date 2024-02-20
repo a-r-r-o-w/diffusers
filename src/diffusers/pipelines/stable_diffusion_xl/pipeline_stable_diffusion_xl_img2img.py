@@ -1434,7 +1434,7 @@ class StableDiffusionXLImg2ImgPipeline(
                     callback_kwargs = {}
                     for k in callback_on_step_begin_tensor_inputs:
                         callback_kwargs[k] = locals()[k]
-                    callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
+                    callback_outputs = callback_on_step_begin(self, i, t, callback_kwargs)
 
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
