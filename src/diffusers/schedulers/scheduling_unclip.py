@@ -219,7 +219,7 @@ class UnCLIPScheduler(SchedulerMixin, ConfigMixin):
         timestep: int,
         sample: torch.FloatTensor,
         prev_timestep: Optional[int] = None,
-        generator=None,
+        generator: Optional[torch.Generator] = None,
         return_dict: bool = True,
     ) -> Union[UnCLIPSchedulerOutput, Tuple]:
         """

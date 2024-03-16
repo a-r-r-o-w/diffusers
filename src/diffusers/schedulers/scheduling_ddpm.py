@@ -265,7 +265,6 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
                 Custom timesteps used to support arbitrary spacing between timesteps. If `None`, then the default
                 timestep spacing strategy of equal spacing between timesteps is used. If `timesteps` is passed,
                 `num_inference_steps` must be `None`.
-
         """
         if num_inference_steps is not None and timesteps is not None:
             raise ValueError("Can only pass one of `num_inference_steps` or `custom_timesteps`.")
@@ -399,7 +398,7 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         model_output: torch.FloatTensor,
         timestep: int,
         sample: torch.FloatTensor,
-        generator=None,
+        generator: Optional[torch.Generator] = None,
         return_dict: bool = True,
     ) -> Union[DDPMSchedulerOutput, Tuple]:
         """
