@@ -50,23 +50,23 @@ def betas_for_alpha_bar(
     max_beta: float = 0.999,
     alpha_transform_type: str = "cosine",
 ) -> torch.FloatTensor:
-    """
-    Create a beta schedule that discretizes the given alpha_t_bar function, which defines the cumulative product of
-    (1-beta) over time from t = [0,1].
+    r"""
+    Create a beta schedule that discretizes the given `alpha_t_bar` function, which defines the cumulative product of
+    `1 - beta` over time from `t = [0, 1]`.
 
-    Contains a function alpha_bar that takes an argument t and transforms it to the cumulative product of (1-beta) up
-    to that part of the diffusion process.
-
+    Contains a function `alpha_bar_fn` that takes an argument `t` and transforms it to the cumulative product of
+    `1 - beta` up to that part of the diffusion process.
 
     Args:
-        num_diffusion_timesteps (`int`): the number of betas to produce.
-        max_beta (`float`): the maximum beta to use; use values lower than 1 to
-                     prevent singularities.
-        alpha_transform_type (`str`, *optional*, default to `cosine`): the type of noise schedule for alpha_bar.
-                     Choose from `cosine` or `exp`
+        num_diffusion_timesteps (`int`):
+            The number of betas to produce.
+        max_beta (`float`):
+            The maximum beta to use; use values lower than 1 to prevent singularities.
+        alpha_transform_type (`str`, *optional*, default to `cosine`):
+            The type of noise schedule for alpha_bar. Choose from `cosine` or `exp`.
 
     Returns:
-        betas (`torch.FloatTensor`): the betas used by the scheduler to step the model outputs
+        betas (`torch.FloatTensor`): The betas used by the scheduler to step the model outputs.
     """
     if alpha_transform_type == "cosine":
 
