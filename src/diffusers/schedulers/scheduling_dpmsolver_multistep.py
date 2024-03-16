@@ -28,10 +28,10 @@ from .scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin, Schedul
 
 # Copied from diffusers.schedulers.scheduling_ddpm.betas_for_alpha_bar
 def betas_for_alpha_bar(
-    num_diffusion_timesteps,
-    max_beta=0.999,
-    alpha_transform_type="cosine",
-):
+    num_diffusion_timesteps: int,
+    max_beta: float = 0.999,
+    alpha_transform_type: str = "cosine",
+) -> torch.FloatTensor:
     """
     Create a beta schedule that discretizes the given alpha_t_bar function, which defines the cumulative product of
     (1-beta) over time from t = [0,1].
@@ -48,7 +48,7 @@ def betas_for_alpha_bar(
                      Choose from `cosine` or `exp`
 
     Returns:
-        betas (`np.ndarray`): the betas used by the scheduler to step the model outputs
+        betas (`torch.FloatTensor`): the betas used by the scheduler to step the model outputs
     """
     if alpha_transform_type == "cosine":
 
@@ -76,13 +76,11 @@ def rescale_zero_terminal_snr(betas):
     """
     Rescales betas to have zero terminal SNR Based on https://arxiv.org/pdf/2305.08891.pdf (Algorithm 1)
 
-
     Args:
-        betas (`torch.FloatTensor`):
-            the betas that the scheduler is being initialized with.
+        betas (`torch.FloatTensor`): The betas that the scheduler is being initialized with.
 
     Returns:
-        `torch.FloatTensor`: rescaled betas with zero terminal SNR
+        `torch.FloatTensor`: Rescaled betas with zero terminal SNR
     """
     # Convert betas to alphas_bar_sqrt
     alphas = 1.0 - betas

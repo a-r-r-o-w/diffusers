@@ -46,10 +46,10 @@ class UnCLIPSchedulerOutput(BaseOutput):
 
 # Copied from diffusers.schedulers.scheduling_ddpm.betas_for_alpha_bar
 def betas_for_alpha_bar(
-    num_diffusion_timesteps,
-    max_beta=0.999,
-    alpha_transform_type="cosine",
-):
+    num_diffusion_timesteps: int,
+    max_beta: float = 0.999,
+    alpha_transform_type: str = "cosine",
+) -> torch.FloatTensor:
     """
     Create a beta schedule that discretizes the given alpha_t_bar function, which defines the cumulative product of
     (1-beta) over time from t = [0,1].
@@ -66,7 +66,7 @@ def betas_for_alpha_bar(
                      Choose from `cosine` or `exp`
 
     Returns:
-        betas (`np.ndarray`): the betas used by the scheduler to step the model outputs
+        betas (`torch.FloatTensor`): the betas used by the scheduler to step the model outputs
     """
     if alpha_transform_type == "cosine":
 
