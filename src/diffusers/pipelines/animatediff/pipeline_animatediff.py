@@ -801,6 +801,10 @@ class AnimateDiffPipeline(
                         ts = timesteps[start_index:end_index]
                         ids = indices[start_index:end_index]
 
+                        # This is retarded and just a hack to make forward process work
+                        # Ideally unet should support multiple timesteps instead of just single integer for this to work
+                        # But since it doesn't, we need to perform per timestep forward pass on the ENTIRE video to get
+                        # new updated frame
                         for i in range(len(ts)):
                             latent_model_input = latents[:, :, ids]
                             print(latent_model_input.shape)
