@@ -401,14 +401,23 @@ class AnimateDiffPipeline(
         return image_embeds
 
     # Copied from diffusers.pipelines.text_to_video_synthesis/pipeline_text_to_video_synth.TextToVideoSDPipeline.decode_latents
-    def decode_latents(self, latents):
+    def decode_latents(self, latents, decode_batch_size: int = 8):
         latents = 1 / self.vae.config.scaling_factor * latents
 
         batch_size, channels, num_frames, height, width = latents.shape
         latents = latents.permute(0, 2, 1, 3, 4).reshape(batch_size * num_frames, channels, height, width)
 
-        image = self.vae.decode(latents).sample
-        video = image[None, :].reshape((batch_size, num_frames, -1) + image.shape[2:]).permute(0, 2, 1, 3, 4)
+        # image = self.vae.decode(latents).sample
+        # video = image[None, :].reshape((batch_size, num_frames, -1) + image.shape[2:]).permute(0, 2, 1, 3, 4)
+
+        video = []
+        for i in range(0, batch_size * num_frames, decode_batch_size):
+            batch_latents = latents[i : i + decode_batch_size]
+            batch_video = self.vae.decode(batch_latents).sample
+            video.append(batch_video)
+        video = torch.cat(video, dim=0)
+        video = video.reshape(batch_size, num_frames, *video.shape[1:]).permute(0, 2, 1, 3, 4)
+
         # we always cast to float32 as this does not cause significant overhead and is compatible with bfloat16
         video = video.float()
         return video
@@ -575,6 +584,10 @@ class AnimateDiffPipeline(
         clip_skip: Optional[int] = None,
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        use_fifodiffusion: bool = False,
+        f: int = 16, # video model generation capacity. 16/24/32 for animatediff
+        n: int = 4, # number of latent partitions
+        lookahead_denoising: bool = True,
         **kwargs,
     ):
         r"""
@@ -651,6 +664,9 @@ class AnimateDiffPipeline(
                 If `return_dict` is `True`, [`~pipelines.animatediff.pipeline_output.AnimateDiffPipelineOutput`] is
                 returned, otherwise a `tuple` is returned where the first element is a list with the generated frames.
         """
+
+        if use_fifodiffusion:
+            num_inference_steps = f * n # force number of inference steps to be size of queue
 
         callback = kwargs.pop("callback", None)
         callback_steps = kwargs.pop("callback_steps", None)
@@ -748,7 +764,8 @@ class AnimateDiffPipeline(
             device,
             generator,
             latents,
-        )
+        ) # also serves as the queue
+        indices = list(range(num_inference_steps))
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -759,6 +776,8 @@ class AnimateDiffPipeline(
             if ip_adapter_image is not None or ip_adapter_image_embeds is not None
             else None
         )
+
+        video_frames = []
 
         num_free_init_iters = self._free_init_num_iters if self.free_init_enabled else 1
         for free_init_iter in range(num_free_init_iters):
@@ -771,44 +790,121 @@ class AnimateDiffPipeline(
             num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
 
             # 8. Denoising loop
-            with self.progress_bar(total=self._num_timesteps) as progress_bar:
-                for i, t in enumerate(timesteps):
-                    # expand the latents if we are doing classifier free guidance
-                    latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-                    latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            total_steps = num_frames + num_inference_steps - f
+            with self.progress_bar(total=total_steps) as progress_bar:
+                for current_step in range(total_steps):
+                    for k in reversed(range(2 * n if lookahead_denoising else n)):
+                        start_index = k * (f // 2) if lookahead_denoising else k * f
+                        middle_index = start_index + f // 2
+                        end_index = start_index + f
 
-                    # predict the noise residual
-                    noise_pred = self.unet(
-                        latent_model_input,
-                        t,
-                        encoder_hidden_states=prompt_embeds,
-                        cross_attention_kwargs=cross_attention_kwargs,
-                        added_cond_kwargs=added_cond_kwargs,
-                    ).sample
+                        ts = timesteps[start_index:end_index]
+                        ids = indices[start_index:end_index]
 
-                    # perform guidance
-                    if self.do_classifier_free_guidance:
-                        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                        for i in range(len(ts)):
+                            latent_model_input = latents[:, :, ids]
+                            print(latent_model_input.shape)
+                            latent_model_input = torch.cat([latent_model_input] * 2) if self.do_classifier_free_guidance else latent_model_input
+                            latent_model_input = self.scheduler.scale_model_input(latent_model_input, ts[i])
 
-                    # compute the previous noisy sample x_t -> x_t-1
-                    latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
+                            noise_pred = self.unet(
+                                latent_model_input,
+                                ts[i],
+                                encoder_hidden_states=prompt_embeds,
+                                cross_attention_kwargs=cross_attention_kwargs,
+                                added_cond_kwargs=added_cond_kwargs,
+                            ).sample
 
-                    if callback_on_step_end is not None:
-                        callback_kwargs = {}
-                        for k in callback_on_step_end_tensor_inputs:
-                            callback_kwargs[k] = locals()[k]
-                        callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
+                            # perform guidance
+                            if self.do_classifier_free_guidance:
+                                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                            
+                            # compute the previous noisy sample x_t -> x_t-1
+                            latents[:, :, [ids[i]]] = self.scheduler.step(noise_pred[:, :, [i]], ts[i], latents[:, :, [ids[i]]], **extra_step_kwargs).prev_sample
 
-                        latents = callback_outputs.pop("latents", latents)
-                        prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                        negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
+                        if lookahead_denoising:
+                            latents[:, :, middle_index:end_index] = latents[:, :, -(f // 2):]
+                        else:
+                            latents[:, :, start_index:end_index] = noise_pred
 
-                    # call the callback, if provided
-                    if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                        progress_bar.update()
-                        if callback is not None and i % callback_steps == 0:
-                            callback(i, t, latents)
+                        # latent_model_input = latents[:, :, ids]
+                        # latent_model_input = torch.cat([latent_model_input] * 2) if self.do_classifier_free_guidance else latent_model_input
+
+                        # for i in range(ts.shape[0]):
+                        #     latent_model_input[:, :, i, :, :] = self.scheduler.scale_model_input(latent_model_input[:, :, i, :, :], ts[i])
+                        
+                        # print(latent_model_input.shape, ts.shape, prompt_embeds.shape)
+                        # noise_pred = self.unet(
+                        #     latent_model_input,
+                        #     ts,
+                        #     encoder_hidden_states=prompt_embeds,
+                        #     cross_attention_kwargs=cross_attention_kwargs,
+                        #     added_cond_kwargs=added_cond_kwargs,
+                        # ).sample
+
+                        # # perform guidance
+                        # if self.do_classifier_free_guidance:
+                        #     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                        #     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                        
+                        # # compute the previous noisy sample x_t -> x_t-1
+                        # for i in range(f):
+                        #     latents[:, :, ids[i]] = self.scheduler.step(noise_pred[:, :, i], ts[i], latents[:, :, ids[i]], **extra_step_kwargs).prev_sample
+                    
+                        # if lookahead_denoising:
+                        #     latents[:, :, middle_index:end_index] = latents[:, :, :-(f // 2)]
+                        # else:
+                        #     latents[:, :, start_index:end_index] = noise_pred
+                    
+                    first_frame_index = f // 2 if lookahead_denoising else 0
+                    frame = latents[:, :, [first_frame_index]]
+                    video_frames.append(frame)
+
+                    # shift latents
+                    latents[:, :, 1:] = latents[:, :, :-1]
+                    latents[:, :, 0] = randn_tensor(latents[:, :, 0].shape, device=device, dtype=latents.dtype)
+                    progress_bar.update()
+            
+            latents = torch.cat(video_frames[-num_frames:], dim=2)
+
+                # for i, t in enumerate(timesteps):
+                #     # expand the latents if we are doing classifier free guidance
+                #     latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                #     latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+
+                #     # predict the noise residual
+                #     noise_pred = self.unet(
+                #         latent_model_input,
+                #         t,
+                #         encoder_hidden_states=prompt_embeds,
+                #         cross_attention_kwargs=cross_attention_kwargs,
+                #         added_cond_kwargs=added_cond_kwargs,
+                #     ).sample
+
+                #     # perform guidance
+                #     if self.do_classifier_free_guidance:
+                #         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                #         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                #     # compute the previous noisy sample x_t -> x_t-1
+                #     latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
+
+                #     if callback_on_step_end is not None:
+                #         callback_kwargs = {}
+                #         for k in callback_on_step_end_tensor_inputs:
+                #             callback_kwargs[k] = locals()[k]
+                #         callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
+
+                #         latents = callback_outputs.pop("latents", latents)
+                #         prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
+                #         negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
+
+                #     # call the callback, if provided
+                #     if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                #         progress_bar.update()
+                #         if callback is not None and i % callback_steps == 0:
+                #             callback(i, t, latents)
 
         # 9. Post processing
         if output_type == "latent":
