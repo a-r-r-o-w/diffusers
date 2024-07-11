@@ -37,6 +37,7 @@ from ...utils import (
 )
 from ...utils.torch_utils import is_compiled_module, randn_tensor
 from ...video_processor import VideoProcessor
+from ..pipeline_utils import StableDiffusionMixin
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -56,12 +57,12 @@ EXAMPLE_DOC_STRING = """
         >>> from diffusers.utils import export_to_gif
 
         >>> # You can replace the checkpoint id with "maxin-cn/Latte-1" too.
-        >>> pipe = LattePipeline.from_pretrained("maxin-cn/Latte-1", torch_dtype=torch.float16)
+        >>> pipe = LattePipeline.from_pretrained("maxin-cn/Latte-1", torch_dtype=torch.float16).to("cuda")
         >>> # Enable memory optimizations.
         >>> pipe.enable_model_cpu_offload()
 
         >>> prompt = "A small cactus with a happy face in the Sahara desert."
-        >>> videos = pipe(prompt).frames
+        >>> videos = pipe(prompt).frames[0]
         >>> export_to_gif(videos, "latte.gif")
         ```
 """
@@ -132,7 +133,7 @@ class LattePipelineOutput(BaseOutput):
     frames: torch.Tensor
 
 
-class LattePipeline(DiffusionPipeline):
+class LattePipeline(DiffusionPipeline, StableDiffusionMixin):
     r"""
     Pipeline for text-to-video generation using Latte.
 
@@ -180,7 +181,9 @@ class LattePipeline(DiffusionPipeline):
             tokenizer=tokenizer, text_encoder=text_encoder, vae=vae, transformer=transformer, scheduler=scheduler
         )
 
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
+        self.vae_scale_factor = (
+            2 ** (len(self.vae.config.block_out_channels) - 1) if hasattr(self, "vae") and self.vae is not None else 8
+        )
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor)
 
     # Adapted from https://github.com/PixArt-alpha/PixArt-alpha/blob/master/diffusion/model/utils.py
@@ -204,7 +207,7 @@ class LattePipeline(DiffusionPipeline):
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         clean_caption: bool = False,
         mask_feature: bool = True,
-        dtype=None,
+        dtype: Optional[torch.dtype] = None,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -233,6 +236,14 @@ class LattePipeline(DiffusionPipeline):
                 If `True`, the function will mask the text embeddings.
         """
         embeds_initially_provided = prompt_embeds is not None and negative_prompt_embeds is not None
+
+        if dtype is None:
+            if self.text_encoder is not None:
+                dtype = self.text_encoder.dtype
+            elif self.transformer is not None:
+                dtype = self.transformer.dtype
+            else:
+                dtype = None
 
         if device is None:
             device = self._execution_device
