@@ -26,7 +26,6 @@ pipe = LattePipeline.from_pretrained(
     text_encoder=text_encoder,
     transformer=None,
     vae=None,
-    torch_dtype=torch.float16,
     device_map="balanced",
 )
 
